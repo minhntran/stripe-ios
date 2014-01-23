@@ -21,7 +21,7 @@
 + (NSDictionary *)camelCasedResponseFromStripeResponse:(NSDictionary *)jsonDictionary;
 + (NSDictionary *)dictionaryFromJSONData:(NSData *)data error:(NSError **)outError;
 + (void)handleTokenResponse:(NSURLResponse *)response body:(NSData *)body error:(NSError *)requestError completion:(STPCompletionBlock)handler;
-+ (NSURL *)apiURLWithPublishableKey:(NSString *)publishableKey;
++ (NSURL *)apiURLWithPublishableKey:(NSString *)publishableKey endPoint:(NSString *)endpoint;
 @end
 
 @implementation Stripe
@@ -29,6 +29,7 @@ static NSString *defaultKey;
 static NSString * const apiURLBase = @"api.stripe.com";
 static NSString * const apiVersion = @"v1";
 static NSString * const tokenEndpoint = @"tokens";
+static NSString * const customerEndpoint = @"customers";
 
 + (id)alloc
 {
@@ -37,12 +38,12 @@ static NSString * const tokenEndpoint = @"tokens";
 }
 
 #pragma mark Private Helpers
-+ (NSURL *)apiURLWithPublishableKey:(NSString *)publishableKey
++ (NSURL *)apiURLWithPublishableKey:(NSString *)publishableKey endPoint:(NSString *)endpoint
 {
     NSURL *url = [[[NSURL URLWithString:
               [NSString stringWithFormat:@"https://%@:@%@", [self URLEncodedString:publishableKey], apiURLBase]]
              URLByAppendingPathComponent:apiVersion]
-            URLByAppendingPathComponent:tokenEndpoint];
+            URLByAppendingPathComponent:endpoint];
     return url;
 }
 
@@ -323,7 +324,7 @@ static NSString * const tokenEndpoint = @"tokens";
 
     [self validateKey:publishableKey];
 
-    NSURL *url = [self apiURLWithPublishableKey:publishableKey];
+    NSURL *url = [self apiURLWithPublishableKey:publishableKey endPoint:tokenEndpoint];
 
     NSMutableURLRequest *request = [[NSMutableURLRequest alloc] initWithURL:url];
     request.HTTPMethod = @"POST";
@@ -348,7 +349,7 @@ static NSString * const tokenEndpoint = @"tokens";
 
     [self validateKey:publishableKey];
 
-    NSURL *url = [[self apiURLWithPublishableKey:publishableKey] URLByAppendingPathComponent:tokenId];
+    NSURL *url = [[self apiURLWithPublishableKey:publishableKey endPoint:tokenEndpoint] URLByAppendingPathComponent:tokenId];
 
     NSMutableURLRequest *request = [[NSMutableURLRequest alloc] initWithURL:url];
     request.HTTPMethod = @"GET";
@@ -391,4 +392,95 @@ static NSString * const tokenEndpoint = @"tokens";
 {
     [self requestTokenWithID:tokenId publishableKey:[self defaultPublishableKey] operationQueue:[NSOperationQueue mainQueue] completion:handler];
 }
+
+#pragma mark Create customer from a token
+
++ (void)handleCustomerResponse:(NSURLResponse *)response body:(NSData *)body error:(NSError *)requestError completion:(STPCompletionBlock)handler
+{
+    if (requestError)
+    {
+        // If this is an error that Stripe returned, let's handle it as a StripeDomain error
+        NSDictionary *jsonDictionary = nil;
+        if (body && (jsonDictionary = [self dictionaryFromJSONData:body error:nil]) && [jsonDictionary valueForKey:@"error"] != nil)
+        {
+            handler(nil, [self errorFromStripeResponse:jsonDictionary]);
+        }
+        // Otherwise, return the raw NSURLError error
+        else
+            handler(nil, requestError);
+    }
+    else
+    {
+        NSError *parseError;
+        NSDictionary *jsonDictionary = [self dictionaryFromJSONData:body error:&parseError];
+
+        if (jsonDictionary == nil)
+            handler(nil, parseError);
+        else if ([(NSHTTPURLResponse *)response statusCode] == 200)
+        {
+            NSLog(@"Dict: %@", jsonDictionary);
+            NSDictionary * cardDictionary = jsonDictionary[@"cards"][@"data"][0];
+            handler([[STPToken alloc] initWithAttributeDictionary:[self camelCasedResponseFromStripeResponse:cardDictionary]], nil);
+        }
+        else
+            handler(nil, [self errorFromStripeResponse:jsonDictionary]);
+    }
+}
+
++ (void)createCustomerWithToken:(STPToken *)token publishableKey:(NSString *)publishableKey secretKey:(NSString *)secretKey completion:(STPCompletionBlock)handler
+{
+    if (token == nil)
+        [NSException raise:@"RequiredParameter" format:@"'token is required to create a customer"];
+    
+    if (handler == nil)
+        [NSException raise:@"RequiredParameter" format:@"'handler' is required to use the customerId that is created"];
+    
+    [self validateKey:publishableKey];
+    
+    NSURL *url = [self apiURLWithPublishableKey:publishableKey endPoint:customerEndpoint];
+    
+    NSMutableURLRequest *request = [[NSMutableURLRequest alloc] initWithURL:url];
+    [request setValue:[NSString stringWithFormat:@"Bearer %@", secretKey] forHTTPHeaderField:@"Authorization"];
+    request.HTTPMethod = @"POST";
+    
+    request.HTTPBody = [[NSString stringWithFormat:@"card=%@", token.tokenId] dataUsingEncoding:NSUTF8StringEncoding]; //[self formEncodedDataFromCard:card];
+    
+    NSOperationQueue * queue = [NSOperationQueue mainQueue];
+    
+    [NSURLConnection sendAsynchronousRequest:request
+                                       queue:queue
+                           completionHandler:^(NSURLResponse *response, NSData *body, NSError *requestError)
+     {
+         [self handleCustomerResponse:response body:body error:requestError completion:handler];
+     }];
+}
+
++ (void)createCustomerWithCard:(STPCard *)card publishableKey:(NSString *)publishableKey secretKey:(NSString *)secretKey completion:(STPCompletionBlock)handler
+{
+    if (card == nil)
+        [NSException raise:@"RequiredParameter" format:@"'card is required to create a customer"];
+    
+    if (handler == nil)
+        [NSException raise:@"RequiredParameter" format:@"'handler' is required to use the customerId that is created"];
+    
+    [self validateKey:publishableKey];
+    
+    NSURL *url = [self apiURLWithPublishableKey:publishableKey endPoint:customerEndpoint];
+    
+    NSMutableURLRequest *request = [[NSMutableURLRequest alloc] initWithURL:url];
+    [request setValue:[NSString stringWithFormat:@"Bearer %@", secretKey] forHTTPHeaderField:@"Authorization"];
+    request.HTTPMethod = @"POST";
+    
+    request.HTTPBody = [self formEncodedDataFromCard:card];
+    
+    NSOperationQueue * queue = [NSOperationQueue mainQueue];
+    
+    [NSURLConnection sendAsynchronousRequest:request
+                                       queue:queue
+                           completionHandler:^(NSURLResponse *response, NSData *body, NSError *requestError)
+     {
+         [self handleCustomerResponse:response body:body error:requestError completion:handler];
+     }];
+}
+
 @end

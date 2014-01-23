@@ -12,6 +12,7 @@
 #import "STPToken.h"
 
 typedef void (^STPCompletionBlock)(STPToken* token, NSError* error);
+typedef void (^STPCreateCustomerCompletionBlock)(NSString* customerId, NSError* error);
 
 // Stripe is a static class used to create and retrieve tokens.
 @interface Stripe : NSObject
@@ -38,4 +39,9 @@ typedef void (^STPCompletionBlock)(STPToken* token, NSError* error);
 + (void)requestTokenWithID:(NSString *)tokenId operationQueue:(NSOperationQueue *)queue completion:(STPCompletionBlock)handler;
 
 + (void)requestTokenWithID:(NSString *)tokenId completion:(STPCompletionBlock)handler;
+
++ (void)createCustomerWithToken:(STPToken *)token publishableKey:(NSString *)publishableKey secretKey:(NSString *)secretKey completion:(STPCompletionBlock)handler;
+
++ (void)createCustomerWithCard:(STPCard *)card publishableKey:(NSString *)publishableKey secretKey:(NSString *)secretKey completion:(STPCompletionBlock)handler;
+
 @end
